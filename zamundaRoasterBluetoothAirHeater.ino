@@ -3,6 +3,11 @@
 #include <SoftwareSerial.h>
 SoftwareSerial mySerial(7, 8); // RX, TX
 
+//constants
+#define START 0
+#define HEATING 1
+#define COOLING 2
+
 // data array for modbus network sharing
 uint16_t au16data[16] = {
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, -1
@@ -36,6 +41,15 @@ int in2 = 12; // IN1 of L239N
 int vccPin = 3; // 5v power of MAX6675
 int gndPin = 2; // gnd of MAX6675
 
+//declare temperature flag and time variables
+int tempFlag = START;
+unsigned long baseTime;
+unsigned long elapsedTime;
+unsigned long waitingTime;
+
+unsigned long baseTimeThermo;
+unsigned long elapsedTimeThermo;
+int thermoWait = 200;
 
 void setup() {
   mySerial.begin(19200); // Soft Serial used for communication through Bluetooth module HC-06
@@ -50,11 +64,18 @@ void setup() {
   pinMode(vccPin, OUTPUT); digitalWrite(vccPin, HIGH);
   pinMode(gndPin, OUTPUT); digitalWrite(gndPin, LOW);
   delay(500);
+  baseTimeThermo = millis();
 }
 
 void loop() {
   //write current thermocouple value
-  au16data[2] = ((uint16_t) thermocouple.readCelsius() * 100);
+  /* Use this for debugging:
+     thermoWait = au16data[6] * 10+1; */
+  elapsedTimeThermo = millis() - baseTimeThermo;
+  if (thermoWait < elapsedTimeThermo ) {
+    au16data[2] = ((uint16_t) thermocouple.readCelsius() * 100);
+    baseTimeThermo = millis();
+  }
 
   //write current fan value for air control
   analogWrite(fan, (au16data[5] / 100.0) * 255);
@@ -65,8 +86,29 @@ void loop() {
   slave.poll( au16data, 16 );
 
   // heater control:
-  digitalWrite(relay, HIGH);
-  delay(au16data[4] * 10);
-  digitalWrite(relay, LOW);
-  delay((100 - au16data[4]) * 10 );
+  if (tempFlag == START) {
+    baseTime = millis();
+    tempFlag = HEATING;
+    digitalWrite(relay, HIGH);
+    waitingTime = au16data[4] * 10;
+  }
+
+  elapsedTime = millis() - baseTime;
+
+  if (waitingTime < elapsedTime || waitingTime <= 0) {
+    //new Base Time
+    baseTime = millis();
+    switch (tempFlag) {
+      case HEATING:
+        tempFlag = COOLING;
+        digitalWrite(relay, LOW);
+        waitingTime = (100 - au16data[4]) * 10;
+        break;
+      case COOLING:
+        tempFlag = HEATING;
+        digitalWrite(relay, HIGH);
+        waitingTime = au16data[4] * 10;
+        break;
+    }
+  }
 }
